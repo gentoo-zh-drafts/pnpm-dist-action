@@ -1,50 +1,59 @@
-name: Create and publish a pnpm node_modules tarball
+name: Create and publish a node_modules tarball
 # Original author: Arthur Zamarin
 # modified by: liuyujielol
-description: Create a Gentoo pnpm node_modules tarball and attach it to a release
+description: Create a Gentoo node_modules tarball and attach it to a release
 inputs:
   tag:
     description: Tag to create release on
     default: ${{ github.ref_name }}
-  vendor-dir:
-    description: Top level dir name inside source archive
   dist-filename:
     description: The name of distribution file (e.g. foo-1.2.3-node_modules.tar.xz)
     default: ${{ github.event.repository.name }}-${{ github.ref_name }}
+  workdir:
+    description: Directory holding package.json, relative to the repository root
+    default: '.'
 runs:
   using: composite
   steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - uses: actions/setup-node@v6
+    - uses: actions/setup-node@v4
       with:
-        node-version: 'lastest' # maybe not ideal
+        node-version: latest
         check-latest: true
 
-    - name: Collect node_modules
+    - uses: oven-sh/setup-bun@v2
+
+    - name: Install node_modules
       shell: bash
-      env:
-        store-dir: "/tmp/node-modules"
+      working-directory: ${{ inputs.workdir }}
       run: |
-        find . -iname 'package.json' -type f -exec dirname {} \; | while read store-dir; do
-          echo "::group::Processing ${store-dir}/package.json"
-          pushd "${store-dir}" >&/dev/null || exit 1
-          pnpm install --frozen-lockfile || exit 1
-          popd >&/dev/null || exit 1
-          echo "::endgroup::"
-        done
+        if [[ -f bun.lock || -f bun.lockb ]]; then
+          echo "::group::Running bun install"
+          bun install --frozen-lockfile
+        elif [[ -f pnpm-lock.yaml ]]; then
+          echo "::group::Running pnpm install"
+          corepack enable pnpm
+          # pnpm 11 blocks dependency build scripts by default (strictDepBuilds); the
+          # vendored node_modules needs them (esbuild etc.), so allow them non-interactively.
+          pnpm install --frozen-lockfile --config.dangerouslyAllowAllBuilds=true
+        else
+          echo "::group::Running npm install"
+          npm install --legacy-peer-deps
+        fi
+        echo "::endgroup::"
 
     - name: Create a node_modules tarball
       shell: bash
+      working-directory: ${{ inputs.workdir }}
       env:
         XZ_OPT: "-T0 -9e"
       run: |
         echo "::group::Creating dist tarball ${{ inputs.dist-filename }}-node_modules.tar.xz"
-        #find "/tmp/node-modules/" -type f -name '*.zip' -delete || exit 1
-        LC_ALL=C TZ=UTC tar -C /tmp \
+        LC_ALL=C TZ=UTC tar \
           --mtime="${SOURCE_DATE_EPOCH:-1970-01-01}" --sort=name --owner=250 --group=250 \
-          -acf "${{ inputs.dist-filename }}-node_modules.tar.xz" node-modules || exit 1
+          -acf "${{ github.workspace }}/${{ inputs.dist-filename }}-node_modules.tar.xz" node_modules || exit 1
         echo "::endgroup::"
 
     - name: Create release
