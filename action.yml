@@ -28,19 +28,25 @@ runs:
     - name: Install node_modules
       shell: bash
       working-directory: ${{ inputs.workdir }}
+      # Each package manager installs only the runner's native packages by default, so the
+      # tarball would build on amd64 alone; every branch also adds the linux arm64 ones.
       run: |
         if [[ -f bun.lock || -f bun.lockb ]]; then
           echo "::group::Running bun install"
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --cpu=x64 --cpu=arm64 --os=linux
         elif [[ -f pnpm-lock.yaml ]]; then
           echo "::group::Running pnpm install"
           corepack enable pnpm
+          if ! grep -qs '^supportedArchitectures:' pnpm-workspace.yaml; then
+            printf '\nsupportedArchitectures:\n  os: [current, linux]\n  cpu: [current, arm64]\n  libc: [current, glibc]\n' >> pnpm-workspace.yaml
+          fi
           # pnpm 11 blocks dependency build scripts by default (strictDepBuilds); the
           # vendored node_modules needs them (esbuild etc.), so allow them non-interactively.
           pnpm install --frozen-lockfile --config.dangerouslyAllowAllBuilds=true
         else
           echo "::group::Running npm install"
           npm install --legacy-peer-deps
+          node "${{ github.action_path }}"/npm-add-arm64.js
         fi
         echo "::endgroup::"
 
